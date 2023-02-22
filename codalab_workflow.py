@@ -6,7 +6,7 @@ from codalab.common import NotFoundError as CodaLabNotFoundError
 
 from typing import Any, Iterable, Dict
 
-WORKSHEET_NAME = "yifanmai-helm-dev-v4"
+WORKSHEET_NAME = "yifanmai-helm-dev-v5"
 
 MODELS = ["openai/davinci", "openai/text-davinci-002"]
 SCENARIOS = ["bold", "boolq", "mmlu"]
@@ -70,16 +70,17 @@ class WorksheetClient:
             bundle_state = bundle["state"]
             self._bundle_states[bundle_name] = bundle_state
 
-    def soft_delete_bundle(self, name: str, reason: str) -> None:
+    def _soft_delete_bundle(self, name: str, reason: str) -> None:
         if name not in self._bundle_states:
             raise Exception(f"Could not find bundle {name}")
-        self._cli.do_command(["cl", "edit", "-n", f"_{reason}_name", f":{name}"])
+        self._cli.do_command(["edit", "-n", f"_{reason}_{name}", f"{name}"])
+        self._refresh_bundle_states()
 
     def upsert_bundle(self, name: str, args: Iterable[str]) -> None:
         if name in self._bundle_states:
             if self._bundle_states[name] in HEALTHY_STATES:
                 return
-            self._refresh_bundle_states(name, reason="failed")
+            self._soft_delete_bundle(name, reason="failed")
 
         if "-n" in args:
             raise Exception(
@@ -140,6 +141,15 @@ def main():
         + [f":{name}" for name in run_bundle_names]
         + [
             f"bash scripts/summarize.sh && bash scripts/output_directory.sh benchmark_output"
+        ],
+    )
+    worksheet_client.upsert_bundle(
+        "soft_link_dev_v0",
+        ["run", ":scripts", ":venv"]
+        + [f":{name}" for name in run_bundle_names]
+        + [
+            # f"rm run_*/stderr run_*/stdout && rm -rf run_*/runs/v1/eval_cache && mkdir -p benchmark_output/runs/v1 && ln -s run_*/runs/v1/* benchmark_output/runs/v1"
+            f"mkdir -p benchmark_output/runs/v1 && ln -s run_*/runs/v1/* benchmark_output/runs/v1"
         ],
     )
 
