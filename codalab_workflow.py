@@ -6,7 +6,7 @@ from codalab.common import NotFoundError as CodaLabNotFoundError
 
 from typing import Any, Iterable, Dict
 
-WORKSHEET_NAME = "yifanmai-helm-dev-v5"
+WORKSHEET_NAME = "agaut-helm-dev-v5"
 
 MODELS = ["openai/davinci", "openai/text-davinci-002"]
 SCENARIOS = ["bold", "boolq", "mmlu"]
@@ -119,6 +119,23 @@ def main():
             "bash scripts/install.sh && bash scripts/output_directory.sh venv",
         ],
     )
+
+    # Cache scenarios.
+    for scenario in SCENARIOS:
+        worksheet_client.upsert_bundle(
+            scenario,
+            [
+                "run",
+                ":scripts",
+                ":run_specs",
+                ":credentials",
+                ":venv",
+                f"bash scripts/cache.sh {scenario}",
+            ],
+        )
+
+    # Evaluate models on HELM.
+    # Dependency is the cached scenarios.
     run_bundle_names = []
     for scenario in SCENARIOS:
         for model in MODELS:
@@ -130,6 +147,7 @@ def main():
                     ":scripts",
                     ":run_specs",
                     ":credentials",
+                    f":{scenario}",
                     ":venv",
                     f"bash scripts/run.sh {scenario} {model} && bash scripts/output_directory.sh benchmark_output",
                 ],
