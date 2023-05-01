@@ -45,6 +45,21 @@ class WorksheetClient:
             self._worksheet_uuid = new_worksheet["uuid"]
         self._cli.do_command(["work", WORKSHEET_NAME])
         self._refresh_bundle_states()
+    
+    def _make_private(self):
+        """Ensure public can not read worksheets or bundles on worksheet.
+        """
+        self._cli.do_command(["wperm", WORKSHEET_NAME, "public", "none"])
+    
+    def _make_public(self):
+        """Ensure public has read permsissions on worksheet.
+        """
+        self._cli.do_command(["wperm", WORKSHEET_NAME, "public", "read"])
+    
+    def _make_bundle_private(self, bundle_name):
+        """Ensure public has no read permissions on bundle.
+        """
+        self._cli.do_command(["perm", bundle_name, "public", "none"])
 
     def _refresh_bundle_states(self) -> None:
         self._bundle_states = {}
@@ -76,7 +91,16 @@ class WorksheetClient:
         self._cli.do_command(["edit", "-n", f"_{reason}_{name}", f"{name}"])
         self._refresh_bundle_states()
 
-    def upsert_bundle(self, name: str, args: Iterable[str]) -> None:
+    def upsert_bundle(self, name: str, args: Iterable[str], private: bool = False) -> None:
+        """Insert or update bundle.
+        Args:
+            name: Name of bundle.
+            args: The command to be run by the bundle CLI.
+            private: If True, set worksheet to private, upload bundle, make bundle private,
+                then set worksheet back to public.
+        """
+        if private: self._make_private()
+
         if name in self._bundle_states:
             if self._bundle_states[name] in HEALTHY_STATES:
                 return
@@ -101,6 +125,10 @@ class WorksheetClient:
                 f"Expected command {args} to create a new bundle named {name}, instead it created {new_bundle_name}"
             )
 
+        if private:
+            self._make_bundle_private(name)
+            self._make_public()
+
 
 def format_run_bundle_name(scenario: str, model: str):
     return f"run_{scenario}_{model.replace('/', '_')}"
@@ -108,9 +136,9 @@ def format_run_bundle_name(scenario: str, model: str):
 
 def main():
     worksheet_client = WorksheetClient(WORKSHEET_NAME)
+    worksheet_client.upsert_bundle("credentials", ["upload", "credentials"], private=True)
     worksheet_client.upsert_bundle("scripts", ["upload", "scripts"])
     worksheet_client.upsert_bundle("run_specs", ["upload", "run_specs"])
-    worksheet_client.upsert_bundle("credentials", ["upload", "credentials"])
     worksheet_client.upsert_bundle(
         "venv",
         [
