@@ -1,8 +1,10 @@
-import hashlib
+import os
 
 from codalab.lib.bundle_cli import BundleCLI
 from codalab.lib.codalab_manager import CodaLabManager
 from codalab.common import NotFoundError as CodaLabNotFoundError
+
+#TODO: add in crfm-helm imports and make sure we can install both this and codalab
 
 from typing import Any, Iterable, Dict
 
@@ -21,7 +23,6 @@ HEALTHY_STATES = [
     "ready",
 ]
 FAILED_STATE = "failed"
-
 
 class WorksheetClient:
     _cli: BundleCLI
@@ -133,9 +134,35 @@ class WorksheetClient:
 def format_run_bundle_name(scenario: str, model: str):
     return f"run_{scenario}_{model.replace('/', '_')}"
 
+def parse_run_entry_files(dir_path: str = "run_specs") -> [List[str], List[str]]:
+    """Read scenarios and models list from run entries files.
 
-def main():
-    worksheet_client = WorksheetClient(WORKSHEET_NAME)
+    Parameters:
+        dir_path: Path to the folder containing all run specs.
+    
+    Returns:
+        A list of scenario names and a list of model names that were listed in the run entry files.
+    """
+    files = [f for f in os.path.listdir(dir_path) if os.path.isfile(join(dir_path, f))]
+
+    run_entries: List[RunEntry] = read_run_entries(files).entries
+    run_specs: List[RunSpec] = run_entries_to_run_specs(run_entries=run_entries)
+
+    # Parse run specs.
+    scenarios, models = list(), list()
+    for run_spec in run_specs:
+        scenarios.append(create_scenario(run_spec.scenario_spec).name)
+        models.extend(run_spec.adapter_spec.model)
+    return scenarios, models
+    
+
+def main(dir_path: str = "run_specs") -> None:
+    """Execute all run entries listed in directory dir_path.
+    """
+    scenarios, models = parse_run_entry_files(dir_path)
+
+    # Create worksheet client.
+    worksheet_client = WorksheetClient(WORKSHEET_NAME)  # temporary
     worksheet_client.upsert_bundle("credentials", ["upload", "credentials"], private=True)
     worksheet_client.upsert_bundle("scripts", ["upload", "scripts"])
     worksheet_client.upsert_bundle("run_specs", ["upload", "run_specs"])
@@ -149,7 +176,7 @@ def main():
     )
 
     # Cache scenarios.
-    for scenario in SCENARIOS:
+    for scenario in scenarios:
         worksheet_client.upsert_bundle(
             scenario,
             [
@@ -165,8 +192,8 @@ def main():
     # Evaluate models on HELM.
     # Dependency is the cached scenarios.
     run_bundle_names = []
-    for scenario in SCENARIOS:
-        for model in MODELS:
+    for scenario in scenarios:
+        for model in models:
             run_bundle_name = format_run_bundle_name(scenario, model)
             worksheet_client.upsert_bundle(
                 run_bundle_name,
@@ -198,7 +225,6 @@ def main():
             f"mkdir -p benchmark_output/runs/v1 && ln -s run_*/runs/v1/* benchmark_output/runs/v1"
         ],
     )
-
 
 if __name__ == "__main__":
     main()

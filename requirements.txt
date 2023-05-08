@@ -1,1 +1,2 @@
-codalab~=1.5.13
+crfm-helm
+codalab==1.5.13
