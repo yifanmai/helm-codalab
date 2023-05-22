@@ -1,14 +1,25 @@
 import os
+import logging
+from tqdm import tqdm
+from typing import Any, Callable, Iterable, Dict
 
 from codalab.lib.bundle_cli import BundleCLI
 from codalab.lib.codalab_manager import CodaLabManager
 from codalab.common import NotFoundError as CodaLabNotFoundError
+from helm.benchmark.presentation.run_entry import RunEntry, RunEntries, read_run_entries
+from helm.benchmark.run import run_entries_to_run_specs
+from helm.benchmark.scenarios.scenario import create_scenario
 
-#TODO: add in crfm-helm imports and make sure we can install both this and codalab
 
-from typing import Any, Iterable, Dict
+# helm-run --suite v1 --max-eval-instances 10 --run-specs "mmlu:subject=philosophy,model=huggingface/gpt2"
 
-WORKSHEET_NAME = "agaut-helm-dev-v5"
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+logger.addHandler(logging.StreamHandler())
+logging.basicConfig(format='%(asctime)s %(message)s %(pathname)s %(lineno)d')
+
+
+WORKSHEET_NAME = "agaut-helm-dev-v10"
 
 MODELS = ["openai/davinci", "openai/text-davinci-002"]
 SCENARIOS = ["bold", "boolq", "mmlu"]
@@ -91,6 +102,9 @@ class WorksheetClient:
             raise Exception(f"Could not find bundle {name}")
         self._cli.do_command(["edit", "-n", f"_{reason}_{name}", f"{name}"])
         self._refresh_bundle_states()
+    
+    def wait_on_bundle(self, name: str):
+        self._cli.do_command(['wait', name])
 
     def upsert_bundle(self, name: str, args: Iterable[str], private: bool = False) -> None:
         """Insert or update bundle.
@@ -130,38 +144,42 @@ class WorksheetClient:
             self._make_bundle_private(name)
             self._make_public()
 
+def format_bundle_name(description: str) -> str:
+    return f"{description.replace('/', '_').replace(':', '_').replace('=', '_').replace(',', '_')}"
 
-def format_run_bundle_name(scenario: str, model: str):
-    return f"run_{scenario}_{model.replace('/', '_')}"
-
-def parse_run_entry_files(dir_path: str = "run_specs") -> [List[str], List[str]]:
-    """Read scenarios and models list from run entries files.
+def parse_run_entry_files(dir_path: str = "run_specs", selection_criteria: Callable[[RunEntry], bool] = lambda x: x.priority <= 2) -> Dict[str, str]:
+    """Read run entries from file and only select those which fit selection_criteria.
 
     Parameters:
         dir_path: Path to the folder containing all run specs.
-    
+        selection_criteria: Return true if input run_entry should be run.
+
     Returns:
-        A list of scenario names and a list of model names that were listed in the run entry files.
+        A mapping from descriptions of run entries to be run in bundles to the scenarios they use.
     """
-    files = [f for f in os.path.listdir(dir_path) if os.path.isfile(join(dir_path, f))]
+    files = [os.path.join(dir_path, f) for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f))]
+    logger.debug(files)
 
     run_entries: List[RunEntry] = read_run_entries(files).entries
-    run_specs: List[RunSpec] = run_entries_to_run_specs(run_entries=run_entries)
-
-    # Parse run specs.
-    scenarios, models = list(), list()
-    for run_spec in run_specs:
-        scenarios.append(create_scenario(run_spec.scenario_spec).name)
-        models.extend(run_spec.adapter_spec.model)
-    return scenarios, models
+    description_to_scenario: Dict[str, str] = dict()
+    for run_entry in run_entries:
+        if not selection_criteria(run_entry): continue
+        run_spec = run_entries_to_run_specs([run_entry])[0]
+        scenario_name = create_scenario(run_spec.scenario_spec).name
+        args_str = ",".join([f"{k}={v}" for k, v in sorted(run_spec.scenario_spec.args.items())])
+        scenario_name_with_args = f"{scenario_name}:{args_str}" if args_str else f"{scenario.name}"
+        description_to_scenario[run_entry.description] = scenario_name_with_args
+    return description_to_scenario
     
 
 def main(dir_path: str = "run_specs") -> None:
     """Execute all run entries listed in directory dir_path.
     """
-    scenarios, models = parse_run_entry_files(dir_path)
+    logger.info("Parsing run_specs...")
+    description_to_scenario = parse_run_entry_files(dir_path)
 
     # Create worksheet client.
+    logger.info("Getting worksheet client...")
     worksheet_client = WorksheetClient(WORKSHEET_NAME)  # temporary
     worksheet_client.upsert_bundle("credentials", ["upload", "credentials"], private=True)
     worksheet_client.upsert_bundle("scripts", ["upload", "scripts"])
@@ -175,39 +193,47 @@ def main(dir_path: str = "run_specs") -> None:
         ],
     )
 
-    # Cache scenarios.
-    for scenario in scenarios:
+    # Cache scenarios
+    logger.info("Caching scenarios...")
+    scenarios_done = set()
+    for description, scenario in tqdm(description_to_scenario.items()):
+        scenario_bundle_name = format_bundle_name(scenario)
+        if scenario_bundle_name in scenarios_done: continue
+        scenarios_done.add(scenario_bundle_name)
         worksheet_client.upsert_bundle(
-            scenario,
+            scenario_bundle_name,
             [
                 "run",
                 ":scripts",
                 ":run_specs",
                 ":credentials",
                 ":venv",
-                f"bash scripts/cache.sh {scenario}",
+                f"bash scripts/cache.sh {description}",
             ],
         )
 
     # Evaluate models on HELM.
     # Dependency is the cached scenarios.
+    logger.info("Running model evals on helm...")
     run_bundle_names = []
-    for scenario in scenarios:
-        for model in models:
-            run_bundle_name = format_run_bundle_name(scenario, model)
-            worksheet_client.upsert_bundle(
-                run_bundle_name,
-                [
-                    "run",
-                    ":scripts",
-                    ":run_specs",
-                    ":credentials",
-                    f":{scenario}",
-                    ":venv",
-                    f"bash scripts/run.sh {scenario} {model} && bash scripts/output_directory.sh benchmark_output",
-                ],
-            )
-            run_bundle_names.append(run_bundle_name)
+    for description, scenario in tqdm(description_to_scenario.items()):
+        run_bundle_name = format_bundle_name(description)
+        worksheet_client.upsert_bundle(
+            run_bundle_name,
+            [
+                "run",
+                ":scripts",
+                ":run_specs",
+                ":credentials",
+                f":{format_bundle_name(scenario)}",
+                ":venv",
+                f"bash scripts/run.sh {description} && bash scripts/output_directory.sh benchmark_output",
+            ],
+        )
+        run_bundle_names.append(run_bundle_name)
+    
+    # Summarize
+    logger.info("Summarizing...")
     worksheet_client.upsert_bundle(
         "summarize",
         ["run", ":scripts", ":venv"]
@@ -216,6 +242,9 @@ def main(dir_path: str = "run_specs") -> None:
             f"bash scripts/summarize.sh && bash scripts/output_directory.sh benchmark_output"
         ],
     )
+
+    # Soft Link
+    logger.info("Soft linking...")
     worksheet_client.upsert_bundle(
         "soft_link_dev_v0",
         ["run", ":scripts", ":venv"]
