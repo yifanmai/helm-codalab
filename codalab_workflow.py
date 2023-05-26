@@ -161,22 +161,22 @@ def parse_run_entry_files(dir_path: str = "run_specs", selection_criteria: Calla
     logger.debug(files)
 
     run_entries: List[RunEntry] = read_run_entries(files).entries
-    description_to_scenario: Dict[str, str] = dict()
+    scenario_to_description: Dict[str, str] = dict()
     for run_entry in run_entries:
         if not selection_criteria(run_entry): continue
         run_spec = run_entries_to_run_specs([run_entry])[0]
         scenario_name = create_scenario(run_spec.scenario_spec).name
         args_str = ",".join([f"{k}={v}" for k, v in sorted(run_spec.scenario_spec.args.items())])
         scenario_name_with_args = f"{scenario_name}:{args_str}" if args_str else f"{scenario.name}"
-        description_to_scenario[run_entry.description] = scenario_name_with_args
-    return description_to_scenario
+        scenario_to_description[scenario_name_with_args] = run_entry.description
+    return scenario_to_description
     
 
 def main(dir_path: str = "run_specs") -> None:
     """Execute all run entries listed in directory dir_path.
     """
     logger.info("Parsing run_specs...")
-    description_to_scenario = parse_run_entry_files(dir_path)
+    scenario_to_description = parse_run_entry_files(dir_path)
 
     # Create worksheet client.
     logger.info("Getting worksheet client...")
@@ -196,7 +196,7 @@ def main(dir_path: str = "run_specs") -> None:
     # Cache scenarios
     logger.info("Caching scenarios...")
     scenarios_done = set()
-    for description, scenario in tqdm(description_to_scenario.items()):
+    for scenario, description in tqdm(scenario_to_description.items()):
         scenario_bundle_name = format_bundle_name(scenario)
         if scenario_bundle_name in scenarios_done: continue
         scenarios_done.add(scenario_bundle_name)
@@ -216,7 +216,7 @@ def main(dir_path: str = "run_specs") -> None:
     # Dependency is the cached scenarios.
     logger.info("Running model evals on helm...")
     run_bundle_names = []
-    for description, scenario in tqdm(description_to_scenario.items()):
+    for scenario, description in tqdm(scenario_to_description.items()):
         run_bundle_name = format_bundle_name(description)
         worksheet_client.upsert_bundle(
             run_bundle_name,
