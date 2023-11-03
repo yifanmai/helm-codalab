@@ -145,7 +145,7 @@ class WorksheetClient:
             self._make_public()
 
 def format_bundle_name(description: str) -> str:
-    return f"{description.replace('/', '_').replace(':', '_').replace('=', '_').replace(',', '_')}"
+    return f"run_{description.replace('/', '_').replace(':', '_').replace('=', '_').replace(',', '_')}"
 
 def parse_run_entry_files(dir_path: str = "run_specs", selection_criteria: Callable[[RunEntry], bool] = lambda x: x.priority <= 2) -> Dict[str, str]:
     """Read run entries from file and only select those which fit selection_criteria.
@@ -239,7 +239,7 @@ def main(dir_path: str = "run_specs") -> None:
         ["run", ":scripts", ":venv"]
         + [f":{name}" for name in run_bundle_names]
         + [
-            f"bash scripts/summarize.sh && bash scripts/output_directory.sh benchmark_output"
+            f"bash scripts/summarize.sh"
         ],
     )
 
